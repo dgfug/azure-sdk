@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot PackageVersion-Helpers.ps1)
+
 $releaseFolder = Resolve-Path "$PSScriptRoot\..\..\_data\releases\latest"
 
 $languageNameMapping = @{
@@ -10,6 +12,86 @@ $languageNameMapping = @{
   go = "Go" # -- No csv or tagging info
   ios = "iOS" # -- These don't follow normal tagging rules
   android = "Android" # -- These don't follow normal tagging/githubio rules
+}
+
+function CreatePackage(
+  [string]$package,
+  [string]$version,
+  [string]$groupId = ""
+)
+{
+  $semVer = ToSemVer $version
+  $versionGA = $versionPreview = ""
+
+  $isGAVersion = $false
+
+  if ($semVer) {
+    $isGAVersion = !$semVer.IsPrerelease
+  }
+  else {
+    # fallback for non semver compliant versions
+    $isGAVersion = ($version -match "^[\d\.]+$" -and !$version.StartsWith("0"))
+  }
+
+  if ($isGAVersion) {
+    $versionGA = $version
+  }
+  else {
+    $versionPreview = $version
+  }
+
+  return [PSCustomObject][ordered]@{
+    Package = $package
+    GroupId = $groupId
+    VersionGA = $versionGA
+    VersionPreview = $versionPreview
+    DisplayName = $package
+    ServiceName = ""
+    RepoPath = "NA"
+    MSDocs = "NA"
+    GHDocs = "NA"
+    Type = ""
+    New = "false"
+    PlannedVersions = ""
+    LastestGADate = ""
+    FirstGADate = ""
+    Support = ""
+    EOLDate = ""
+    Hide = ""
+    Replace = ""
+    ReplaceGuide = ""
+    MSDocService = ""
+    ServiceId = ""
+    Notes = ""
+  };
+}
+
+function ClonePackage($pkg)
+{
+  return [PSCustomObject][ordered]@{
+    Package = $pkg.Package
+    GroupId = $pkg.GroupId
+    VersionGA = $pkg.VersionGA
+    VersionPreview = $pkg.VersionPreview
+    DisplayName = $pkg.DisplayName
+    ServiceName = $pkg.ServiceName
+    RepoPath = $pkg.RepoPath
+    MSDocs = $pkg.MSDocs
+    GHDocs = $pkg.GHDocs
+    Type = $pkg.Type
+    New = $pkg.New
+    PlannedVersions = $pkg.PlannedVersions
+    LatestGADate = $pkg.LatestGADate
+    FirstGADate = $pkg.FirstGADate
+    Support = $pkg.Support
+    EOLDate = $pkg.EOLDate
+    Hide = $pkg.Hide
+    Replace = $pkg.Replace
+    ReplaceGuide = $pkg.ReplaceGuide
+    MSDocService = $pkg.MSDocService
+    ServiceId = $pkg.ServiceId
+    Notes = $pkg.Notes
+  };
 }
 
 function Get-LanguageName($lang)
@@ -68,8 +150,8 @@ function Set-PackageListForLanguage([string]$lang, [Array]$packageList)
 
   $new, $other = Get-PackageListSplit $packageList
 
-  $new = $new | Sort-Object Type, DisplayName, Package, GroupId, ServiceName
-  $other = $other | Sort-Object Type, DisplayName, Package, GroupId, ServiceName
+  $new = $new | Sort-Object Type, DisplayName, Package, GroupId, ServiceName, Support
+  $other = $other | Sort-Object Type, DisplayName, Package, GroupId, ServiceName, Support
 
   $sortedPackages = $new + $other
   $sortedPackages | ConvertTo-CSV -NoTypeInformation -UseQuotes Always | Out-File $packagelistFile -encoding ascii
@@ -267,6 +349,51 @@ function CopyOverFieldValues($copyFromReleaseFolder, $field)
     }
 
     Set-PackageListForLanguage $lang $pl2
+  }
+}
+
+function ImportDataFromFile($importFile)
+{
+  $importPackageData = Get-Content $importFile | ConvertFrom-Csv
+
+  $allLanguageData = @{}
+
+  foreach ($lang in $languageNameMapping.Keys)
+  {
+    $allLanguageData[$lang] = Get-PackageListForLanguage $lang
+  }
+
+  foreach ($pkgData in $importPackageData)
+  {
+    $releaseData = $allLanguageData[$pkgData.Language]
+
+    if ($pkgData.Language -eq "Java" -or $pkgData.Language -eq "Android") {
+      $gaSplit = $pkgData.Package.Split("/")
+      if ($gaSplit.Count -ne 2) { Write-Error "Unable to split package name into group and artifact for $($pkgData.Package)" }
+
+      $pkgData | Add-Member -NotePropertyName "GroupId" -NotePropertyValue $gaSplit[0]
+      $pkgData.Package = $gaSplit[1]
+    }
+
+    $pkg = FindMatchingPackage $pkgData $releaseData
+
+    if (!$pkg) {
+      Write-Host "Did not find matching package for $($pkgData.Language) $($pkgData.Package) so adding"
+      $pkg = CreatePackage $pkgData.Package "0.0.0"
+      $releaseData += $pkg
+      $allLanguageData[$pkgData.Language] = $releaseData
+    }
+
+    foreach ($prop in $pkgData.PSObject.Properties.Name) {
+      if ($pkg.PSObject.Properties.Name -contains $prop) {
+        $pkg.$prop = $pkgData.$prop
+      }
+    }
+  }
+
+  foreach ($lang in $languageNameMapping.Keys)
+  {
+    Set-PackageListForLanguage $lang $allLanguageData[$lang]
   }
 }
 

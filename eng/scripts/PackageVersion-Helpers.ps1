@@ -81,6 +81,9 @@ function GetLatestTags($repo, [DateTime]$afterDate = [DateTime]::Now.AddMonths(-
           $tagDate = [DateTime]$tagNode.target.target.committedDate
         }
 
+        # Convert the commit times from UTC to local for comparison
+        $tagDate = $tagDate.ToLocalTime();
+
         if ($tagDate -ge $afterDate) {
           Write-Verbose "Found $($tagNode.name) in repo $repo with date ${tagDate}"
           $tags += [PSCustomObject]@{
@@ -114,6 +117,15 @@ function ToSemVer($version, $tagDate = "Unknown")
   return $sv
 }
 
+function Get-DateFromSemVer($semVer)
+{
+  $d = $semVer.Date -as [DateTime]
+  if ($d) {
+    return $d.ToString("MM/dd/yyyy")
+  }
+  return ""
+}
+
 function GetPackageVersions($lang, [DateTime]$afterDate = [DateTime]::Now.AddMonths(-1), $tagSplit = "_")
 {
   $repoName = "azure-sdk-for-$lang"
@@ -143,6 +155,13 @@ function GetPackageVersions($lang, [DateTime]$afterDate = [DateTime]::Now.AddMon
     {
       $package = ""
       $version = $tagName
+    }
+
+    # Temporary hack to avoid seeing the track 2 mgmt version 30.0.0 packages
+    # we plan to clean-up and deprecate those version at which point this
+    # hack can be removed.
+    if ($lang -eq "js" -and $version.StartsWith("30.0.0-beta")) {
+      continue
     }
 
     if (!$packageVersions.ContainsKey($package)) {

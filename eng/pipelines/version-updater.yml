@@ -1,5 +1,5 @@
 pool:
-  vmImage: 'windows-2019'
+  vmImage: 'windows-2022'
 
 resources:
   repositories:
@@ -7,7 +7,7 @@ resources:
       type: github
       name: Azure/azure-sdk-tools
       endpoint: azure
-      ref: refs/tags/azure-sdk-tools_20210707.1
+      ref: refs/tags/azure-sdk-tools_20220404.3
 
 variables:
   AzureSDKClonePath: $(System.DefaultWorkingDirectory)/azure-sdk
@@ -65,7 +65,14 @@ steps:
     PushArgs: -f
     WorkingDirectory: $(AzureSDKClonePath)
     ScriptDirectory: $(AzureSDKToolsScriptsPath)
-    PRLabels: 'auto-merge'
+
+- pwsh: |
+    . ./eng/scripts/Github-Helpers.ps1
+    EnableAutoMergeForPullRequest -pullRequestNumber $(Submitted.PullRequest.Number)
+  displayName: Apply AutoMerge to Pull Request
+  workingDirectory: $(AzureSDKClonePath)
+  env:
+    GH_TOKEN: $(azuresdk-github-pat)
 
 - template: template/steps/generate-releasenotes.yml
 

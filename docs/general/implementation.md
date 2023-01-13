@@ -57,7 +57,7 @@ where _ServiceName_ is the canonical shortname without spaces, and _Configuratio
 
 ## Parameter validation
 
-The service client will have several methods that perform requests on the service.  _Service parameters_ are directly passed across the wire to an Azure service.  _Client parameters_ are not passed directly to the service, but used within the client library to fulfill the request.  Examples of client parameters include values that are used to construct a URI, or a file that needs to be uploaded to storage.
+The service client will have methods that send requests to the service. These methods take two kinds of parameters: _service parameters_ and _client parameters_. _Service parameters_ are sent across the wire to the service as URL segments, query parameters, request header values, and request bodies (typically JSON or XML).  _Client parameters_ are used solely within the client library and are not sent to the service; examples are path parameters, CancellationTokens or file paths.  If, for example, a path parameter is not validated, it could result in sending a request to a malformed URI, which could prevent the service from having the opportunity to do validation on it.
 
 {% include requirement/MUST id="general-params-client-validation" %} validate client parameters.  This includes checks for null values for required path parameters, and checks for empty string values if a required path parameter declares a `minLength` greater than zero.
 
@@ -177,9 +177,19 @@ Distributed tracing mechanisms allow the consumer to trace their code from front
 
 {% include requirement/MUST id="general-tracing-accept-context" %} accept a context from calling code to establish a parent span.
 
-{% include requirement/MUST id="general-tracing-pass-context" %} pass the context to the backend service through the appropriate headers (`traceparent`, `tracestate`, etc.) to support [Azure Monitor].  This is generally done with the HTTP pipeline.
+{% include requirement/MUST id="general-tracing-pass-context" %} pass the context to the backend service through the appropriate headers (`traceparent` and `tracestate` per [W3C Trace-Context](https://www.w3.org/TR/trace-context/) standard)) to support [Azure Monitor].  This is generally done with the HTTP pipeline.
 
-{% include requirement/MUST id="general-tracing-new-span-per-method" %} create a new span for each method that user code calls.  New spans must be children of the context that was passed in.  If no context was passed in, a new root span must be created.
+{% include requirement/MUST id="general-tracing-new-span-per-method" %} create only one span for client method that user code calls.  New spans must be children of the context that was passed in.  If no context was passed in, a new root span must be created.
+
+{% include requirement/MUST id="general-tracing-suppress-client-spans-for-inner-methods" %} When client method creates a new span and internally calls into other public client methods of the same or different Azure SDK, spans created for inner client methods MUST be suppressed, their attributes and events ignored.  Nested spans created for REST calls MUST be the children of the outer client call span.  Suppression is generally done by Azure Core.
+
+{% include requirement/MUST id="general-tracing-new-span-per-method-conventions" %} populate span properties according to [Tracing Conventions].
+
+{% include requirement/MUST id="general-tracing-new-span-per-method-naming" %} us `<client> <method>` as the name of the per-method span without namespace or async suffix. Follow language-specific conventions on casing or separator.
+
+{% include requirement/MUST id="general-tracing-new-span-per-method-duration" %} start per-method spans before sending the request or calling any significantly time consuming code that might fail. End the span only after all network, IO or other unreliable and time consuming operations are complete.
+
+{% include requirement/MUST id="general-tracing-new-span-per-method-failure" %} If method throws exception, record exception on span. Do not record exception if exception is handled within service method.
 
 {% include requirement/MUST id="general-tracing-new-span-per-rest-call" %} create a new span (which must be a child of the per-method span) for each REST call that the client library makes.  This is generally done with the HTTP pipeline.
 
@@ -271,3 +281,4 @@ As outlined above, writing tests that we can run constantly is critical for conf
 [Azure Monitor]: https://azure.microsoft.com/services/monitor/
 [1]: https://www.youtube.com/watch?v=PAAkCSZUG1c&t=9m28s
 [2]: https://martinfowler.com/bliki/TestCoverage.html
+[Tracing Conventions]: {{ site.baseurl }}{% link docs/tracing/distributed-tracing-conventions.md %}

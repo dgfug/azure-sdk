@@ -6,61 +6,66 @@ param (
 Set-StrictMode -Version 3
 
 . (Join-Path $PSScriptRoot PackageList-Helpers.ps1)
-. (Join-Path $PSScriptRoot PackageVersion-Helpers.ps1)
 
-function CreatePackage(
-  [string]$package,
-  [string]$version,
-  [string]$groupId = ""
-)
+function Get-android-Packages
 {
-  $semVer = ToSemVer $version
-  $versionGA = $versionPreview = ""
+  # Rest API docs https://search.maven.org/classic/#api
+  $baseMavenQueryUrl = "https://search.maven.org/solrsearch/select?q=g:com.azure.android&rows=100&wt=json"
+  $mavenQuery = Invoke-RestMethod "https://search.maven.org/solrsearch/select?q=g:com.azure.android&rows=2000&wt=json" -MaximumRetryCount 3
 
-  $isGAVersion = $false
+  Write-Host "Found $($mavenQuery.response.numFound) android packages on maven packages"
 
-  if ($semVer) {
-    $isGAVersion = !$semVer.IsPrerelease
-  }
-  else {
-    # fallback for non semver compliant versions
-    $isGAVersion = ($version -match "^[\d\.]+$" -and !$version.StartsWith("0"))
-  }
+  $packages = @()
+  $count = 0
+  while ($count -lt $mavenQuery.response.numFound)
+  {
+    $packages += $mavenQuery.response.docs | Foreach-Object { CreatePackage $_.a $_.latestVersion $_.g }
+    $count += $mavenQuery.response.docs.count
 
-  if ($isGAVersion) {
-    $versionGA = $version
-  }
-  else {
-    $versionPreview = $version
+    $mavenQuery = Invoke-RestMethod ($baseMavenQueryUrl + "&start=$count") -MaximumRetryCount 3
   }
 
-  return [PSCustomObject][ordered]@{
-    Package = $package
-    GroupId = $groupId
-    VersionGA = $versionGA
-    VersionPreview = $versionPreview
-    DisplayName = $package
-    ServiceName = ""
-    RepoPath = "NA"
-    MSDocs = "NA"
-    GHDocs = "NA"
-    Type = ""
-    New = "false"
-    PlannedVersions = ""
-    FirstGADate = ""
-    Support = ""
-    Hide = ""
-    Replace = ""
-    Notes = ""
-  };
+  return $packages
 }
+
 function Get-java-Packages
 {
   # Rest API docs https://search.maven.org/classic/#api
-  $mavenQuery = Invoke-RestMethod "https://search.maven.org/solrsearch/select?q=g:com.microsoft.azure*%20OR%20g:com.azure*&rows=1000&wt=json"
+  $baseMavenQueryUrl = "https://search.maven.org/solrsearch/select?q=g:com.microsoft.azure*%20OR%20g:com.azure*&rows=100&wt=json"
+  $mavenQuery = Invoke-RestMethod $baseMavenQueryUrl -MaximumRetryCount 3
 
-  Write-Host "Found $($mavenQuery.response.numFound) maven packages"
-  $packages = $mavenQuery.response.docs | Foreach-Object { CreatePackage $_.a $_.latestVersion $_.g }
+  Write-Host "Found $($mavenQuery.response.numFound) java packages on maven packages"
+
+  $packages = @()
+  $count = 0
+  while ($count -lt $mavenQuery.response.numFound)
+  {
+    $packages += $mavenQuery.response.docs | Foreach-Object { if ($_.g -ne "com.azure.android") { CreatePackage $_.a $_.latestVersion $_.g } }
+    $count += $mavenQuery.response.docs.count
+
+    $mavenQuery = Invoke-RestMethod ($baseMavenQueryUrl + "&start=$count") -MaximumRetryCount 3
+  }
+
+  $repoTags = GetPackageVersions "java"
+
+  foreach ($package in $packages)
+  {
+    # If package is in com.azure.resourcemanager groupid and we shipped it recently because it is in the last months repo tags
+    # then treat it as a new mgmt library
+    if ($package.GroupId -eq "com.azure.resourcemanager" `
+        -and $package.Package -match "^azure-resourcemanager-(?<serviceName>.*?)$" `
+        -and $repoTags.ContainsKey($package.Package))
+    {
+      $serviceName = (Get-Culture).TextInfo.ToTitleCase($matches["serviceName"])
+      $package.Type = "mgmt"
+      $package.New = "true"
+      $package.RepoPath = $matches["serviceName"].ToLower()
+      $package.ServiceName = $serviceName
+      $package.DisplayName = "Resource Management - $serviceName"
+      Write-Host "Marked package $($package.Package) as new mgmt package with version $($package.VersionGA + $package.VersionPreview)"
+    }
+  }
+
   return $packages
 }
 
@@ -69,10 +74,29 @@ function Get-dotnet-Packages
   # Rest API docs
   # https://docs.microsoft.com/nuget/api/search-query-service-resource
   # https://docs.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#search-syntax
-  $nugetQuery = Invoke-RestMethod "https://azuresearch-usnc.nuget.org/query?q=owner:azure-sdk&prerelease=true&semVerLevel=2.0.0&take=1000"
+  $nugetQuery = Invoke-RestMethod "https://azuresearch-usnc.nuget.org/query?q=owner:azure-sdk&prerelease=true&semVerLevel=2.0.0&take=1000" -MaximumRetryCount 3
 
   Write-Host "Found $($nugetQuery.totalHits) nuget packages"
   $packages = $nugetQuery.data | Foreach-Object { CreatePackage $_.id $_.version }
+
+  $repoTags = GetPackageVersions "dotnet"
+
+  foreach ($package in $packages)
+  {
+    # If package starts with Azure.ResourceManager. and we shipped it recently because it is in the last months repo tags
+    # then treat it as a new mgmt library
+    if ($package.Package -match "^Azure.ResourceManager.(?<serviceName>.*?)$" -and $repoTags.ContainsKey($package.Package))
+    {
+      $serviceName = (Get-Culture).TextInfo.ToTitleCase($matches["serviceName"])
+      $package.Type = "mgmt"
+      $package.New = "true"
+      $package.RepoPath = $matches["serviceName"].ToLower()
+      $package.ServiceName = $serviceName
+      $package.DisplayName = "Resource Management - $serviceName"
+      Write-Host "Marked package $($package.Package) as new mgmt package with version $($package.VersionGA + $package.VersionPreview)"
+    }
+  }
+
   return $packages
 }
 
@@ -85,7 +109,7 @@ function Get-js-Packages
   {
     # Rest API docs https://github.com/npm/registry/blob/master/docs/REGISTRY-API.md
     # max size returned is 250 so we have to do some basic paging.
-    $npmQuery = Invoke-RestMethod "https://registry.npmjs.com/-/v1/search?text=maintainer:azure-sdk&size=250&from=$from"
+    $npmQuery = Invoke-RestMethod "https://registry.npmjs.com/-/v1/search?text=maintainer:azure-sdk&size=250&from=$from" -MaximumRetryCount 3
 
     if ($npmQuery.objects.Count -ne 0) {
       $npmPackages += $npmQuery.objects.package
@@ -109,11 +133,15 @@ function Get-js-Packages
   {
     # If package starts with arm- and we shipped it recently because it is in the last months repo tags
     # then treat it as a new mgmt library
-    if ($package.Package.StartsWith("@azure/arm-") -and $repoTags.ContainsKey($package.Package))
+    if ($package.Package -match "^@azure/arm-(?<serviceName>.*?)(-profile.*)?$" -and $repoTags.ContainsKey($package.Package))
     {
+      $serviceName = (Get-Culture).TextInfo.ToTitleCase($matches["serviceName"])
       $package.Type = "mgmt"
       $package.New = "true"
-      Write-Host "Marked package $($package.Package) as new mgmt package"
+      $package.RepoPath = $matches["serviceName"].ToLower()
+      $package.ServiceName = $serviceName
+      $package.DisplayName = "Resource Management - $serviceName"
+      Write-Host "Marked package $($package.Package) as new mgmt package with version $($package.VersionGA + $package.VersionPreview)"
     }
   }
 
@@ -125,10 +153,44 @@ function Get-python-Packages
   $pythonQuery = "import xmlrpc.client; [print(pkg[1]) for pkg in xmlrpc.client.ServerProxy('https://pypi.org/pypi').user_packages('azure-sdk')]"
   $pythonPackagesNames = (python -c "$pythonQuery")
 
-  $pythonPackages = $pythonPackagesNames | Foreach-Object { try { (Invoke-RestMethod "https://pypi.org/pypi/$_/json").info } catch { } }
-
+  $pythonPackages = $pythonPackagesNames | Foreach-Object { try { (Invoke-RestMethod "https://pypi.org/pypi/$_/json" -MaximumRetryCount 3) } catch { } }
   Write-Host "Found $($pythonPackages.Count) python packages"
-  $packages = $pythonPackages | Foreach-Object { CreatePackage $_.name $_.version }
+
+  $packages = @()
+  foreach ($package in $pythonPackages)
+  {
+    $packageVersion = $package.info.Version
+    $packageReleases = @($package.releases.PSObject.Properties.Name)
+
+    # Python info.Version only takes last stable version so we need to sort the releases.
+    # Only use the sorted releases if they are all valid sem versions otherwise we might have
+    # and incorrect sort. We determine that if the list of sorted versions match the count of the versions
+    $versions = [AzureEngSemanticVersion]::SortVersionStrings($packageReleases)
+    if ($versions.Count -eq $packageReleases.Count)
+    {
+      $packageVersion = $versions[0]
+    }
+    $packages += CreatePackage $package.info.name $packageVersion
+  }
+
+  $repoTags = GetPackageVersions "python"
+
+  foreach ($package in $packages)
+  {
+    # If package starts with azure-mgmt- and we shipped it recently because it is in the last months repo tags
+    # then treat it as a new mgmt library
+    if ($package.Package -match "^azure-mgmt-(?<serviceName>.*?)?$" -and $repoTags.ContainsKey($package.Package))
+    {
+      $serviceName = (Get-Culture).TextInfo.ToTitleCase($matches["serviceName"])
+      $package.Type = "mgmt"
+      $package.New = "true"
+      $package.RepoPath = $matches["serviceName"].ToLower()
+      $package.ServiceName = $serviceName
+      $package.DisplayName = "Resource Management - $serviceName"
+      Write-Host "Marked package $($package.Package) as new mgmt package with version $($package.VersionGA + $package.VersionPreview)"
+    }
+  }
+
   return $packages
 }
 
@@ -162,22 +224,27 @@ function Get-go-Packages
     $package = CreatePackage $tag $versions[0]
 
     # We should keep this regex in sync with what is in the go repo at https://github.com/Azure/azure-sdk-for-go/blob/main/eng/scripts/Language-Settings.ps1#L32
-    if ($package.Package -match "(?<modPath>sdk/(?<serviceDir>(resourcemanager/)?([^/]+/)?(?<modName>[^/]+$)))")
+    if ($package.Package -match "(?<modPath>sdk/(?<serviceDir>(resourcemanager/)?((?<serviceName>[^/]+)/)?(?<modName>[^/]+$)))")
     {
       $modPath = $matches["modPath"]
       $modName = $matches["modName"]
       $serviceDir = $matches["serviceDir"]
+      $serviceName = $matches["serviceName"]
+      if (!$serviceName) { $serviceName = $modName }
 
       if ($modName.StartsWith("arm"))
       {
+        # Skip arm packages that aren't in the resourcemanager service folder
+        if (!$serviceDir.StartsWith("resourcemanager")) { continue }
         $package.Type = "mgmt"
         $package.New = "true"
+        $modName = $modName.Substring(3); # Remove arm from front
         $package.DisplayName = "Resource Management - $((Get-Culture).TextInfo.ToTitleCase($modName))"
-        Write-Host "Marked package $($package.Package) as new mgmt package"
+        Write-Host "Marked package $($package.Package) as new mgmt package with version $($package.VersionGA + $package.VersionPreview)"
       }
 
-      $package.ServiceName = (Get-Culture).TextInfo.ToTitleCase($modGroup)
-      $package.RepoPath = $serviceDir
+      $package.ServiceName = (Get-Culture).TextInfo.ToTitleCase($serviceName)
+      $package.RepoPath = $serviceDir.ToLower()
 
       $packages += $package
     }
@@ -210,17 +277,20 @@ function Write-Latest-Versions($lang)
       }
     }
     else {
-      # For new packages let the Update-Release-Versions script update the versions
-      if ($pkgEntry.New -eq "true") {
-        continue
-      }
-
       if ($pkg.Type -and $pkg.Type -ne $pkgEntry.Type) {
         $pkgEntry.Type = $pkg.Type
       }
 
       if ($pkg.New -ne "false" -and $pkg.New -ne $pkgEntry.New) {
         $pkgEntry.New = $pkg.New
+      }
+
+      if (!$pkgEntry.RepoPath -or $pkgEntry.RepoPath -eq "NA" -and $pkg.RepoPath) {
+        $pkgEntry.RepoPath = $pkg.RepoPath
+      }
+
+      if (!$pkgEntry.ServiceName -and $pkg.ServiceName) {
+        $pkgEntry.ServiceName = $pkg.ServiceName
       }
 
       if ($pkgEntry.VersionGA.StartsWith("0")) {
@@ -230,7 +300,10 @@ function Write-Latest-Versions($lang)
       # Update version of package
       if ($pkg.VersionGA) {
         $pkgEntry.VersionGA = $pkg.VersionGA
-        if ($pkgEntry.VersionGA -gt $pkgEntry.VersionPreview) {
+
+        $gaSemVer = ToSemVer $pkgEntry.VersionGA
+        $previewSemVer = ToSemVer $pkgEntry.VersionPreview
+        if ($gaSemVer -and $previewSemVer -and $gaSemVer -gt $previewSemVer) {
           $pkgEntry.VersionPreview = ""
         }
       }
@@ -259,12 +332,19 @@ function Write-Latest-Versions($lang)
 switch($language)
 {
   "all" {
-    Write-Latest-Versions "java"
     Write-Latest-Versions "js"
     Write-Latest-Versions "dotnet"
     Write-Latest-Versions "python"
     Write-Latest-Versions "cpp"
     Write-Latest-Versions "go"
+    
+    # Currently ignoring errors for maven search site until incident is fixed
+    # see https://github.com/Azure/azure-sdk/issues/5368
+    try {
+      Write-Latest-Versions "java"
+      Write-Latest-Versions "android"
+    }
+    catch { }
     break
   }
   "java" {
@@ -288,6 +368,10 @@ switch($language)
     break
   }
   "go" {
+    Write-Latest-Versions $language
+    break
+  }
+  "android" {
     Write-Latest-Versions $language
     break
   }

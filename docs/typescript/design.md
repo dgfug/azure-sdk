@@ -57,7 +57,7 @@ The following are examples that do not meet the guidelines:
 * `@microsoft/cosmos` (not in `@azure` scope).
 * `@azure/digitaltwins` (not kebab-cased).
 
-{% include requirement/SHOULD id="ts-npm-package-name-follow-conventions" %} you should follow the casing conventions of any existing GA packages released in the `@azure` npm scope. It's not worth renaming a package just to align on naming conventions.
+{% include requirement/SHOULD id="ts-npm-package-name-follow-conventions" %} you should follow the casing conventions of any existing stable packages released in the `@azure` npm scope. It's not worth renaming a package just to align on naming conventions.
 
 ## The Client API {#ts-apisurface-serviceclient}
 
@@ -364,6 +364,8 @@ If you need to support ES5 and are concerned with library size, use `async` when
 Both iterators and async iterators are built into JavaScript and easy to consume. Other streaming interfaces (such as node streams) may be used where appropriate as long as they're idiomatic.
 
 {% include requirement/SHOULD id="ts-use-interface-parameters" %} prefer interface types to class types. JavaScript is fundamentally a duck-typed language, and so alternative classes that implement the same interface should be allowed. Declare parameters as interface types over class types whenever possible. Overloads with specific class types are fine but there should be an overload present with the generic interface.
+
+{% include requirement/MUST id="ts-avoid-extending-cross-package" %} not extend classes from a different package. It can be non-obvious that a dependent package is broken by a change to a base class. For example, adding a non-compatible method signature or a new private member is considered a non-breaking additive change, but would potentially conflict in the derived class.
 
 <a name="ts-example-iterators"></a>
 

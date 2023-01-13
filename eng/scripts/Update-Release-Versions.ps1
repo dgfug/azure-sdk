@@ -11,7 +11,6 @@ Set-StrictMode -Version 3
 $ProgressPreference = "SilentlyContinue"; # Disable invoke-webrequest progress dialog
 
 . (Join-Path $PSScriptRoot PackageList-Helpers.ps1)
-. (Join-Path $PSScriptRoot PackageVersion-Helpers.ps1)
 
 function GetVersionWebContent($language, $package, $versionType="latest-ga")
 {
@@ -109,6 +108,7 @@ function CheckOptionalLinks($linkTemplates, $pkg, $skipIfNA = $false)
   if (!$skipIfNA -or $pkg.GHDocs -eq "")
   {
     $ghdocvalid = ($pkg.VersionGA -or $pkg.VersionPreview)
+    $ghlink = "[No versioned link yet]"
     if ($pkg.VersionGA) {
       $ghlink = GetLinkTemplateValue $linkTemplates "ghdocs_url_template" $pkg.Package $pkg.VersionGA
       $ghdocvalid = $ghdocvalid -and (CheckLink $ghlink $false)
@@ -194,6 +194,7 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
 
     if ($null -eq $pkgVersion) {
       Write-Verbose "Skipping update for $($pkg.Package) as we don't have version info for it. "
+      CheckOptionalLinks $langLinkTemplates $pkg
       continue;
     }
 
@@ -212,6 +213,7 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
     if ($gaVersions.Count -ne 0)
     {
       $latestGA = $gaVersions[0].RawVersion
+      $latestGADate = Get-DateFromSemVer $gaVersions[0]
       if ($latestGA -eq $latestPreview) {
         $latestPreview = ""
       }
@@ -226,11 +228,6 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
       }
     }
 
-    if ($pkg.VersionGA -and $pkg.Type -eq "client") {
-      if ([bool]($pkg.PSobject.Properties.name -match "FirstGADate") -and !$pkg.FirstGADate) {
-        $pkg.FirstGADate = GetFirstGADate $pkgVersion $pkg $gaVersions
-      }
-    }
     if ($version -eq "") {
       $pkg.VersionGA = ""
     }
@@ -242,6 +239,13 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
       else {
         Write-Warning "Not updating VersionGA for $($pkg.Package) because at least one associated URL is not valid!"
       }
+    }
+
+    if ($pkg.VersionGA) {
+      if (!$pkg.FirstGADate) {
+        $pkg.FirstGADate = GetFirstGADate $pkgVersion $pkg $gaVersions
+      }
+      $pkg.LatestGADate = $latestGADate
     }
 
     $version = $latestPreview
@@ -264,6 +268,7 @@ function Update-Packages($lang, $packageList, $langVersions, $langLinkTemplates)
         Write-Warning "Not updating VersionPreview for $($pkg.Package) because at least one associated URL is not valid!"
       }
     }
+
     CheckOptionalLinks $langLinkTemplates $pkg
   }
 }
